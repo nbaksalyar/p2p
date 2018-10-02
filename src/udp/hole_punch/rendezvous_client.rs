@@ -1,7 +1,6 @@
-use {Interface, NatError, NatState};
-use bincode::{Infinite, deserialize, serialize};
-use mio::{Poll, PollOpt, Ready, Token};
+use bincode::{deserialize, serialize, Infinite};
 use mio::net::UdpSocket;
+use mio::{Poll, PollOpt, Ready, Token};
 use rand::{self, Rng};
 use sodium::crypto::sealedbox;
 use std::any::Any;
@@ -11,6 +10,7 @@ use std::net::SocketAddr;
 use std::rc::Rc;
 use std::str::{self, FromStr};
 use udp::{UdpEchoReq, UdpEchoResp};
+use {Interface, NatError, NatState};
 
 pub type Finish = Box<FnMut(&mut Interface, &Poll, Token, ::Res<(UdpSocket, SocketAddr)>)>;
 
@@ -32,8 +32,10 @@ impl UdpRendezvousClient {
         let mut servers = ifc.config().remote_udp_rendezvous_servers.clone();
         let num_servers = servers.len();
         if num_servers < 2 {
-            info!("Udp: Symmetric NAT detection and port prediction will not be possible using \
-                   less than 2 Rendezvous Servers. Use at-least 2. Recommended is 3.");
+            info!(
+                "Udp: Symmetric NAT detection and port prediction will not be possible using \
+                 less than 2 Rendezvous Servers. Use at-least 2. Recommended is 3."
+            );
         } else if num_servers > 3 {
             let mut rng = rand::thread_rng();
             rng.shuffle(&mut servers);
@@ -45,20 +47,22 @@ impl UdpRendezvousClient {
             None => return Err(NatError::UdpRendezvousFailed),
         };
 
-        poll.register(&sock,
-                      token,
-                      Ready::writable() | Ready::error() | Ready::hup(),
-                      PollOpt::edge())?;
+        poll.register(
+            &sock,
+            token,
+            Ready::writable() | Ready::error() | Ready::hup(),
+            PollOpt::edge(),
+        )?;
 
         let client = Rc::new(RefCell::new(UdpRendezvousClient {
-                                              sock: Some(sock),
-                                              token: token,
-                                              servers: servers,
-                                              our_ext_addrs: Vec::with_capacity(num_servers),
-                                              write_queue: Some((server, req.clone())),
-                                              req: req,
-                                              f: f,
-                                          }));
+            sock: Some(sock),
+            token: token,
+            servers: servers,
+            our_ext_addrs: Vec::with_capacity(num_servers),
+            write_queue: Some((server, req.clone())),
+            req: req,
+            f: f,
+        }));
 
         if ifc.insert_state(token, client.clone()).is_err() {
             debug!("Unable to insert UdpRendezvousClient State!");
@@ -79,8 +83,11 @@ impl UdpRendezvousClient {
         };
         let bytes_rxd = match r {
             Ok((bytes, _)) => bytes,
-            Err(ref e) if e.kind() == ErrorKind::WouldBlock ||
-                          e.kind() == ErrorKind::Interrupted => return,
+            Err(ref e)
+                if e.kind() == ErrorKind::WouldBlock || e.kind() == ErrorKind::Interrupted =>
+            {
+                return
+            }
             Err(e) => {
                 debug!("Udp Rendezvous Client has errored out in read: {:?}", e);
                 return self.handle_err(ifc, poll);
@@ -97,20 +104,20 @@ impl UdpRendezvousClient {
 
         if let Ok(our_ext_addr_bytes) = sealedbox::open(&cipher_text, ifc.enc_pk(), ifc.enc_sk()) {
             match str::from_utf8(&our_ext_addr_bytes) {
-                Ok(our_ext_addr_str) => {
-                    match SocketAddr::from_str(our_ext_addr_str) {
-                        Ok(addr) => self.our_ext_addrs.push(addr),
-                        Err(e) => {
-                            debug!("Ignoring UdpEchoResp which contained non-parsable address: \
-                                    {:?}",
-                                   e);
-                        }
+                Ok(our_ext_addr_str) => match SocketAddr::from_str(our_ext_addr_str) {
+                    Ok(addr) => self.our_ext_addrs.push(addr),
+                    Err(e) => {
+                        debug!(
+                            "Ignoring UdpEchoResp which contained non-parsable address: \
+                             {:?}",
+                            e
+                        );
                     }
-                }
-                Err(e) => {
-                    debug!("Ignoring UdpEchoResp which contained non-utf8 address: {:?}",
-                           e)
-                }
+                },
+                Err(e) => debug!(
+                    "Ignoring UdpEchoResp which contained non-utf8 address: {:?}",
+                    e
+                ),
             }
         } else {
             debug!("Ignoring UdpEchoResp which could not be decrypted.");
@@ -144,30 +151,36 @@ impl UdpRendezvousClient {
         match r {
             Ok(bytes_txd) => {
                 if bytes_txd != resp.len() {
-                    debug!("Partial datagram sent - datagram will be treated as corrupted. \
-                            Actual size: {} B, sent size: {} B.",
-                           resp.len(),
-                           bytes_txd);
+                    debug!(
+                        "Partial datagram sent - datagram will be treated as corrupted. \
+                         Actual size: {} B, sent size: {} B.",
+                        resp.len(),
+                        bytes_txd
+                    );
                 }
             }
-            Err(ref e) if e.kind() == ErrorKind::WouldBlock ||
-                          e.kind() == ErrorKind::Interrupted => {
+            Err(ref e)
+                if e.kind() == ErrorKind::WouldBlock || e.kind() == ErrorKind::Interrupted =>
+            {
                 self.write_queue = Some((server, resp))
             }
             Err(e) => return Err(From::from(e)),
         }
 
         if self.write_queue.is_none() {
-            Ok(poll.reregister(self.sock.as_ref().ok_or(NatError::UnregisteredSocket)?,
-                               self.token,
-                               Ready::readable() | Ready::error() | Ready::hup(),
-                               PollOpt::edge())?)
+            Ok(poll.reregister(
+                self.sock.as_ref().ok_or(NatError::UnregisteredSocket)?,
+                self.token,
+                Ready::readable() | Ready::error() | Ready::hup(),
+                PollOpt::edge(),
+            )?)
         } else {
-            Ok(poll.reregister(self.sock.as_ref().ok_or(NatError::UnregisteredSocket)?,
-                               self.token,
-                               Ready::readable() | Ready::writable() | Ready::error() |
-                               Ready::hup(),
-                               PollOpt::edge())?)
+            Ok(poll.reregister(
+                self.sock.as_ref().ok_or(NatError::UnregisteredSocket)?,
+                self.token,
+                Ready::readable() | Ready::writable() | Ready::error() | Ready::hup(),
+                PollOpt::edge(),
+            )?)
         }
     }
 
@@ -183,15 +196,19 @@ impl UdpRendezvousClient {
         let mut is_err = false;
         for addr in &self.our_ext_addrs {
             if ext_addr.ip() != addr.ip() {
-                info!("Symmetric NAT with variable IP mapping detected. No logic for Udp \
-                       external address prediction for these circumstances!");
+                info!(
+                    "Symmetric NAT with variable IP mapping detected. No logic for Udp \
+                     external address prediction for these circumstances!"
+                );
                 is_err = true;
                 break;
             } else if port_prediction_offset == 0 {
                 port_prediction_offset = addr.port() as i32 - ext_addr.port() as i32;
             } else if port_prediction_offset != addr.port() as i32 - ext_addr.port() as i32 {
-                info!("Symmetric NAT with non-uniformly changing port mapping detected. No logic \
-                       for Udp external address prediction for these circumstances!");
+                info!(
+                    "Symmetric NAT with non-uniformly changing port mapping detected. No logic \
+                     for Udp external address prediction for these circumstances!"
+                );
                 is_err = true;
                 break;
             }
@@ -203,6 +220,11 @@ impl UdpRendezvousClient {
             return self.handle_err(ifc, poll);
         }
 
+        if port_prediction_offset != 0 {
+            info!("EDM with delta {}", port_prediction_offset);
+        } else {
+            info!("EIM")
+        }
         let port = ext_addr.port();
         ext_addr.set_port((port as i32 + port_prediction_offset) as u16);
         trace!("Our ext addr by Udp Rendezvous Client: {}", ext_addr);
@@ -222,10 +244,12 @@ impl UdpRendezvousClient {
 impl NatState for UdpRendezvousClient {
     fn ready(&mut self, ifc: &mut Interface, poll: &Poll, event: Ready) {
         if event.is_error() || event.is_hup() {
-            let e = match self.sock
-                      .as_ref()
-                      .ok_or(NatError::UnregisteredSocket)
-                      .and_then(|s| s.take_error().map_err(From::from)) {
+            let e = match self
+                .sock
+                .as_ref()
+                .ok_or(NatError::UnregisteredSocket)
+                .and_then(|s| s.take_error().map_err(From::from))
+            {
                 Ok(err) => err.map_or(NatError::Unknown, NatError::from),
                 Err(e) => From::from(e),
             };
