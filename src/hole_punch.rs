@@ -1,10 +1,9 @@
-use {Interface, NatError, NatMsg, NatState, NatTimer};
 use config::{HOLE_PUNCH_TIMEOUT_SEC, HOLE_PUNCH_WAIT_FOR_OTHER, RENDEZVOUS_TIMEOUT_SEC};
-use mio::{Poll, Token};
 use mio::channel::Sender;
 use mio::net::UdpSocket;
 use mio::tcp::TcpStream;
 use mio::timer::Timeout;
+use mio::{Poll, Token};
 use sodium::crypto::box_;
 use std::any::Any;
 use std::cell::RefCell;
@@ -15,6 +14,7 @@ use std::rc::{Rc, Weak};
 use std::time::Duration;
 use tcp::TcpHolePunchMediator;
 use udp::UdpHolePunchMediator;
+use {Interface, NatError, NatMsg, NatState, NatTimer};
 
 /// Callback to receive the result of rendezvous
 pub type GetInfo = Box<FnMut(&mut Interface, &Poll, ::Res<(Handle, RendezvousInfo)>)>;
@@ -25,7 +25,7 @@ pub type HolePunchFinsih = Box<FnMut(&mut Interface, &Poll, ::Res<HolePunchInfo>
 ///
 /// This is supposed to be exchanged out of band between the peers to allow them to hole-punch to
 /// each other.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct RendezvousInfo {
     /// UDP addresses in order
     pub udp: Vec<SocketAddr>,
@@ -137,27 +137,27 @@ impl HolePunchMediator {
     /// band with the peer and begin hole punching by giving the peer's rendezvous information.
     pub fn start(ifc: &mut Interface, poll: &Poll, f: GetInfo) -> ::Res<()> {
         let token = ifc.new_token();
-        let dur = ifc.config()
+        let dur = ifc
+            .config()
             .rendezvous_timeout_sec
             .unwrap_or(RENDEZVOUS_TIMEOUT_SEC);
         let timeout = ifc.set_timeout(Duration::from_secs(dur), NatTimer::new(token, TIMER_ID))?;
 
         let mediator = Rc::new(RefCell::new(HolePunchMediator {
-                                                token: token,
-                                                state: State::None,
-                                                udp_child: None,
-                                                tcp_child: None,
-                                                self_weak: Weak::new(),
-                                            }));
+            token: token,
+            state: State::None,
+            udp_child: None,
+            tcp_child: None,
+            self_weak: Weak::new(),
+        }));
         let weak = Rc::downgrade(&mediator);
         let weak_cloned = weak.clone();
         mediator.borrow_mut().self_weak = weak.clone();
 
-        let handler = move |ifc: &mut Interface, poll: &Poll, res| if let Some(mediator) =
-            weak.upgrade() {
-            mediator
-                .borrow_mut()
-                .handle_udp_rendezvous(ifc, poll, res);
+        let handler = move |ifc: &mut Interface, poll: &Poll, res| {
+            if let Some(mediator) = weak.upgrade() {
+                mediator.borrow_mut().handle_udp_rendezvous(ifc, poll, res);
+            }
         };
 
         let udp_child = match UdpHolePunchMediator::start(ifc, poll, Box::new(handler)) {
@@ -168,11 +168,10 @@ impl HolePunchMediator {
             }
         };
 
-        let handler = move |ifc: &mut Interface, poll: &Poll, res| if let Some(mediator) =
-            weak_cloned.upgrade() {
-            mediator
-                .borrow_mut()
-                .handle_tcp_rendezvous(ifc, poll, res);
+        let handler = move |ifc: &mut Interface, poll: &Poll, res| {
+            if let Some(mediator) = weak_cloned.upgrade() {
+                mediator.borrow_mut().handle_tcp_rendezvous(ifc, poll, res);
+            }
         };
 
         let tcp_child = match TcpHolePunchMediator::start(ifc, poll, Box::new(handler)) {
@@ -208,10 +207,12 @@ impl HolePunchMediator {
         }
     }
 
-    fn handle_udp_rendezvous(&mut self,
-                             ifc: &mut Interface,
-                             poll: &Poll,
-                             res: ::Res<Vec<SocketAddr>>) {
+    fn handle_udp_rendezvous(
+        &mut self,
+        ifc: &mut Interface,
+        poll: &Poll,
+        res: ::Res<Vec<SocketAddr>>,
+    ) {
         if let State::Rendezvous { ref mut info, .. } = self.state {
             if let Ok(ext_addrs) = res {
                 // We assume that udp_child does not return an empty list here - rather it
@@ -244,8 +245,9 @@ impl HolePunchMediator {
                 ref mut f,
                 ref timeout,
             } => {
-                if (self.udp_child.is_none() || !info.udp.is_empty()) &&
-                   (self.tcp_child.is_none() || info.tcp.is_some()) {
+                if (self.udp_child.is_none() || !info.udp.is_empty())
+                    && (self.tcp_child.is_none() || info.tcp.is_some())
+                {
                     if self.udp_child.is_none() && self.tcp_child.is_none() {
                         f(ifc, poll, Err(NatError::RendezvousFailed));
                         Err(NatError::RendezvousFailed)
@@ -264,9 +266,11 @@ impl HolePunchMediator {
                 }
             }
             ref x => {
-                warn!("Logic Error in state book-keeping - Pls report this as a bug. Expected \
-                       state: State::Rendezvous ;; Found: {:?}",
-                      x);
+                warn!(
+                    "Logic Error in state book-keeping - Pls report this as a bug. Expected \
+                     state: State::Rendezvous ;; Found: {:?}",
+                    x
+                );
                 Err(NatError::InvalidState)
             }
         };
@@ -285,11 +289,13 @@ impl HolePunchMediator {
         }
     }
 
-    fn punch_hole(&mut self,
-                  ifc: &mut Interface,
-                  poll: &Poll,
-                  peer: RendezvousInfo,
-                  mut f: HolePunchFinsih) {
+    fn punch_hole(
+        &mut self,
+        ifc: &mut Interface,
+        poll: &Poll,
+        peer: RendezvousInfo,
+        mut f: HolePunchFinsih,
+    ) {
         match self.state {
             State::ReadyToHolePunch => (),
             ref x => {
@@ -298,11 +304,14 @@ impl HolePunchMediator {
             }
         };
 
-        let dur = ifc.config()
+        let dur = ifc
+            .config()
             .hole_punch_timeout_sec
             .unwrap_or(HOLE_PUNCH_TIMEOUT_SEC);
-        let timeout = match ifc.set_timeout(Duration::from_secs(dur),
-                                            NatTimer::new(self.token, TIMER_ID)) {
+        let timeout = match ifc.set_timeout(
+            Duration::from_secs(dur),
+            NatTimer::new(self.token, TIMER_ID),
+        ) {
             Ok(t) => t,
             Err(e) => {
                 debug!("Terminating punch hole due to error in timer: {:?}", e);
@@ -314,15 +323,18 @@ impl HolePunchMediator {
 
         if let Some(udp_child) = self.udp_child.as_ref().cloned() {
             let weak = self.self_weak.clone();
-            let handler = move |ifc: &mut Interface, poll: &Poll, res| if let Some(mediator) =
-                weak.upgrade() {
-                mediator
-                    .borrow_mut()
-                    .handle_udp_hole_punch(ifc, poll, res);
+            let handler = move |ifc: &mut Interface, poll: &Poll, res| {
+                if let Some(mediator) = weak.upgrade() {
+                    mediator.borrow_mut().handle_udp_hole_punch(ifc, poll, res);
+                }
             };
-            if let Err(e) = udp_child
-                   .borrow_mut()
-                   .punch_hole(ifc, poll, peer.udp, &peer_enc_pk, Box::new(handler)) {
+            if let Err(e) = udp_child.borrow_mut().punch_hole(
+                ifc,
+                poll,
+                peer.udp,
+                &peer_enc_pk,
+                Box::new(handler),
+            ) {
                 debug!("Udp punch hole failed to start: {:?}", e);
                 self.udp_child = None;
             }
@@ -330,17 +342,19 @@ impl HolePunchMediator {
 
         if let Some(tcp_child) = self.tcp_child.as_ref().cloned() {
             let weak = self.self_weak.clone();
-            let handler = move |ifc: &mut Interface, poll: &Poll, res| if let Some(mediator) =
-                weak.upgrade() {
-                mediator
-                    .borrow_mut()
-                    .handle_tcp_hole_punch(ifc, poll, res);
+            let handler = move |ifc: &mut Interface, poll: &Poll, res| {
+                if let Some(mediator) = weak.upgrade() {
+                    mediator.borrow_mut().handle_tcp_hole_punch(ifc, poll, res);
+                }
             };
             if let Some(tcp_peer) = peer.tcp {
-                if let Err(e) =
-                    tcp_child
-                        .borrow_mut()
-                        .punch_hole(ifc, poll, tcp_peer, &peer_enc_pk, Box::new(handler)) {
+                if let Err(e) = tcp_child.borrow_mut().punch_hole(
+                    ifc,
+                    poll,
+                    tcp_peer,
+                    &peer_enc_pk,
+                    Box::new(handler),
+                ) {
                     debug!("Tcp punch hole failed to start: {:?}", e);
                     self.tcp_child = None;
                 }
@@ -363,10 +377,12 @@ impl HolePunchMediator {
         };
     }
 
-    fn handle_udp_hole_punch(&mut self,
-                             ifc: &mut Interface,
-                             poll: &Poll,
-                             res: ::Res<(UdpSocket, SocketAddr, Token)>) {
+    fn handle_udp_hole_punch(
+        &mut self,
+        ifc: &mut Interface,
+        poll: &Poll,
+        res: ::Res<(UdpSocket, SocketAddr, Token)>,
+    ) {
         if let State::HolePunching { ref mut info, .. } = self.state {
             self.udp_child = None;
             if let Ok(sock) = res {
@@ -378,10 +394,12 @@ impl HolePunchMediator {
         self.handle_hole_punch_impl(ifc, poll);
     }
 
-    fn handle_tcp_hole_punch(&mut self,
-                             ifc: &mut Interface,
-                             poll: &Poll,
-                             res: ::Res<(TcpStream, Token)>) {
+    fn handle_tcp_hole_punch(
+        &mut self,
+        ifc: &mut Interface,
+        poll: &Poll,
+        res: ::Res<(TcpStream, Token)>,
+    ) {
         if let State::HolePunching { ref mut info, .. } = self.state {
             self.tcp_child = None;
             if let Ok(sock) = res {
@@ -414,7 +432,8 @@ impl HolePunchMediator {
                     Ok(false)
                 } else {
                     // At-least one has succeeded
-                    let wait = ifc.config()
+                    let wait = ifc
+                        .config()
                         .hole_punch_wait_for_other
                         .unwrap_or(HOLE_PUNCH_WAIT_FOR_OTHER);
                     if wait {
@@ -427,9 +446,11 @@ impl HolePunchMediator {
                 }
             }
             ref x => {
-                warn!("Logic Error in state book-keeping - Pls report this as a bug. Expected \
-                       state: State::HolePunching ;; Found: {:?}",
-                      x);
+                warn!(
+                    "Logic Error in state book-keeping - Pls report this as a bug. Expected \
+                     state: State::HolePunching ;; Found: {:?}",
+                    x
+                );
                 Err(NatError::InvalidState)
             }
         };
@@ -489,9 +510,11 @@ impl NatState for HolePunchMediator {
                 true
             }
             ref x => {
-                warn!("Logic error, report bug: terminating due to invalid state for a timeout: \
-                       {:?}",
-                      x);
+                warn!(
+                    "Logic error, report bug: terminating due to invalid state for a timeout: \
+                     {:?}",
+                    x
+                );
                 true
             }
         };
@@ -555,10 +578,9 @@ impl Handle {
     /// Fire hole punch request from a non-event loop thread.
     pub fn fire_hole_punch(self, peer: RendezvousInfo, f: HolePunchFinsih) {
         let token = self.token;
-        if let Err(e) = self.tx
-               .send(NatMsg::new(move |ifc, poll| {
-                                     Handle::start_hole_punch(ifc, poll, token, peer, f)
-                                 })) {
+        if let Err(e) = self.tx.send(NatMsg::new(move |ifc, poll| {
+            Handle::start_hole_punch(ifc, poll, token, peer, f)
+        })) {
             debug!("Could not fire hole punch request: {:?}", e);
         } else {
             mem::forget(self);
@@ -566,11 +588,13 @@ impl Handle {
     }
 
     /// Request hole punch from within the event loop thread.
-    pub fn start_hole_punch(ifc: &mut Interface,
-                            poll: &Poll,
-                            hole_punch_mediator: Token,
-                            peer: RendezvousInfo,
-                            mut f: HolePunchFinsih) {
+    pub fn start_hole_punch(
+        ifc: &mut Interface,
+        poll: &Poll,
+        hole_punch_mediator: Token,
+        peer: RendezvousInfo,
+        mut f: HolePunchFinsih,
+    ) {
         if let Some(nat_state) = ifc.state(hole_punch_mediator) {
             let mut state = nat_state.borrow_mut();
             let mediator = match state.as_any().downcast_mut::<HolePunchMediator>() {
@@ -581,7 +605,6 @@ impl Handle {
                 }
             };
             mediator.punch_hole(ifc, poll, peer, f);
-
         }
     }
 
@@ -596,9 +619,10 @@ impl Handle {
 impl Drop for Handle {
     fn drop(&mut self) {
         let token = self.token;
-        let _ = self.tx
-            .send(NatMsg::new(move |ifc, poll| if let Some(nat_state) = ifc.state(token) {
-                                  nat_state.borrow_mut().terminate(ifc, poll);
-                              }));
+        let _ = self.tx.send(NatMsg::new(move |ifc, poll| {
+            if let Some(nat_state) = ifc.state(token) {
+                nat_state.borrow_mut().terminate(ifc, poll);
+            }
+        }));
     }
 }
