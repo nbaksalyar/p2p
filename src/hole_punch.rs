@@ -352,7 +352,6 @@ impl HolePunchMediator {
                     ifc,
                     poll,
                     tcp_peer,
-                    our_ext_addr,
                     &peer_enc_pk,
                     Box::new(handler),
                 ) {
