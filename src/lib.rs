@@ -304,7 +304,7 @@ pub use error::NatError;
 pub use hole_punch::{
     GetInfo, Handle, HolePunchFinsih, HolePunchInfo, HolePunchMediator, RendezvousInfo,
 };
-pub use tcp::TcpRendezvousServer;
+pub use tcp::{Socket, TcpRendezvousServer};
 pub use udp::UdpRendezvousServer;
 
 /// Result type used by this crate.

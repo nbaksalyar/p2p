@@ -1,14 +1,16 @@
-use NatError;
-use bincode::{Infinite, deserialize_from, serialize_into};
+#![allow(missing_docs)]
+
+use bincode::{deserialize_from, serialize_into, Infinite};
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
-use mio::{Evented, Poll, PollOpt, Ready, Token};
 use mio::tcp::TcpStream;
+use mio::{Evented, Poll, PollOpt, Ready, Token};
 use serde::de::DeserializeOwned;
 use serde::ser::Serialize;
 use std::collections::VecDeque;
 use std::io::{self, Cursor, ErrorKind, Read, Write};
 use std::mem;
 use std::net::SocketAddr;
+use NatError;
 
 const MAX_PAYLOAD_SIZE: usize = 1024;
 
@@ -25,33 +27,27 @@ impl Socket {
     pub fn wrap(stream: TcpStream) -> Self {
         Socket {
             inner: Some(SockInner {
-                            stream: stream,
-                            read_buffer: Vec::new(),
-                            read_len: 0,
-                            write_queue: VecDeque::with_capacity(5),
-                            current_write: None,
-                        }),
+                stream: stream,
+                read_buffer: Vec::new(),
+                read_len: 0,
+                write_queue: VecDeque::with_capacity(5),
+                current_write: None,
+            }),
         }
     }
 
     pub fn local_addr(&self) -> ::Res<SocketAddr> {
-        let inner = self.inner
-            .as_ref()
-            .ok_or(NatError::UnregisteredSocket)?;
+        let inner = self.inner.as_ref().ok_or(NatError::UnregisteredSocket)?;
         Ok(inner.stream.local_addr()?)
     }
 
     pub fn peer_addr(&self) -> ::Res<SocketAddr> {
-        let inner = self.inner
-            .as_ref()
-            .ok_or(NatError::UnregisteredSocket)?;
+        let inner = self.inner.as_ref().ok_or(NatError::UnregisteredSocket)?;
         Ok(inner.stream.peer_addr()?)
     }
 
     pub fn take_error(&self) -> ::Res<Option<io::Error>> {
-        let inner = self.inner
-            .as_ref()
-            .ok_or(NatError::UnregisteredSocket)?;
+        let inner = self.inner.as_ref().ok_or(NatError::UnregisteredSocket)?;
         Ok(inner.stream.take_error()?)
     }
 
@@ -63,9 +59,7 @@ impl Socket {
     //                     again in the next invocation of the `ready` handler.
     //   - Err(error):     there was an error reading from the socket.
     pub fn read<T: DeserializeOwned>(&mut self) -> ::Res<Option<T>> {
-        let inner = self.inner
-            .as_mut()
-            .ok_or(NatError::UnregisteredSocket)?;
+        let inner = self.inner.as_mut().ok_or(NatError::UnregisteredSocket)?;
         inner.read()
     }
 
@@ -76,14 +70,13 @@ impl Socket {
     //   - Ok(false):  the message has been queued, but not yet fully written.
     //                 Write event is already scheduled for next time.
     //   - Err(error): there was an error while writing to the socket.
-    pub fn write<T: Serialize>(&mut self,
-                               poll: &Poll,
-                               token: Token,
-                               msg: Option<T>)
-                               -> ::Res<bool> {
-        let inner = self.inner
-            .as_mut()
-            .ok_or(NatError::UnregisteredSocket)?;
+    pub fn write<T: Serialize>(
+        &mut self,
+        poll: &Poll,
+        token: Token,
+        msg: Option<T>,
+    ) -> ::Res<bool> {
+        let inner = self.inner.as_mut().ok_or(NatError::UnregisteredSocket)?;
         inner.write(poll, token, msg)
     }
 }
@@ -95,43 +88,45 @@ impl Default for Socket {
 }
 
 impl Evented for Socket {
-    fn register(&self,
-                poll: &Poll,
-                token: Token,
-                interest: Ready,
-                opts: PollOpt)
-                -> io::Result<()> {
-        let inner = self.inner
-            .as_ref()
-            .ok_or_else(|| {
-                            io::Error::new(ErrorKind::Other,
-                                           format!("{}", NatError::UnregisteredSocket))
-                        })?;
+    fn register(
+        &self,
+        poll: &Poll,
+        token: Token,
+        interest: Ready,
+        opts: PollOpt,
+    ) -> io::Result<()> {
+        let inner = self.inner.as_ref().ok_or_else(|| {
+            io::Error::new(
+                ErrorKind::Other,
+                format!("{}", NatError::UnregisteredSocket),
+            )
+        })?;
         inner.register(poll, token, interest, opts)
     }
 
-    fn reregister(&self,
-                  poll: &Poll,
-                  token: Token,
-                  interest: Ready,
-                  opts: PollOpt)
-                  -> io::Result<()> {
-        let inner = self.inner
-            .as_ref()
-            .ok_or_else(|| {
-                            io::Error::new(ErrorKind::Other,
-                                           format!("{}", NatError::UnregisteredSocket))
-                        })?;
+    fn reregister(
+        &self,
+        poll: &Poll,
+        token: Token,
+        interest: Ready,
+        opts: PollOpt,
+    ) -> io::Result<()> {
+        let inner = self.inner.as_ref().ok_or_else(|| {
+            io::Error::new(
+                ErrorKind::Other,
+                format!("{}", NatError::UnregisteredSocket),
+            )
+        })?;
         inner.reregister(poll, token, interest, opts)
     }
 
     fn deregister(&self, poll: &Poll) -> io::Result<()> {
-        let inner = self.inner
-            .as_ref()
-            .ok_or_else(|| {
-                            io::Error::new(ErrorKind::Other,
-                                           format!("{}", NatError::UnregisteredSocket))
-                        })?;
+        let inner = self.inner.as_ref().ok_or_else(|| {
+            io::Error::new(
+                ErrorKind::Other,
+                format!("{}", NatError::UnregisteredSocket),
+            )
+        })?;
         inner.deregister(poll)
     }
 }
@@ -174,21 +169,21 @@ impl SockInner {
                             return Err(NatError::ZeroByteRead);
                         }
                     }
-                    self.read_buffer
-                        .extend_from_slice(&buffer[0..bytes_read]);
+                    self.read_buffer.extend_from_slice(&buffer[0..bytes_read]);
                     is_something_read = true;
                 }
                 Err(error) => {
-                    return if error.kind() == ErrorKind::WouldBlock ||
-                              error.kind() == ErrorKind::Interrupted {
-                               if is_something_read {
-                                   self.read_from_buffer()
-                               } else {
-                                   Ok(None)
-                               }
-                           } else {
-                               Err(From::from(error))
-                           }
+                    return if error.kind() == ErrorKind::WouldBlock
+                        || error.kind() == ErrorKind::Interrupted
+                    {
+                        if is_something_read {
+                            self.read_from_buffer()
+                        } else {
+                            Ok(None)
+                        }
+                    } else {
+                        Err(From::from(error))
+                    }
                 }
             }
         }
@@ -202,8 +197,7 @@ impl SockInner {
                 return Ok(None);
             }
 
-            self.read_len = Cursor::new(&self.read_buffer)
-                .read_u32::<LittleEndian>()? as usize;
+            self.read_len = Cursor::new(&self.read_buffer).read_u32::<LittleEndian>()? as usize;
 
             if self.read_len > MAX_PAYLOAD_SIZE {
                 return Err(NatError::PayloadSizeProhibitive);
@@ -262,8 +256,9 @@ impl SockInner {
                     }
                 }
                 Err(error) => {
-                    if error.kind() == ErrorKind::WouldBlock ||
-                       error.kind() == ErrorKind::Interrupted {
+                    if error.kind() == ErrorKind::WouldBlock
+                        || error.kind() == ErrorKind::Interrupted
+                    {
                         self.current_write = Some(data);
                     } else {
                         return Err(From::from(error));
@@ -287,21 +282,23 @@ impl SockInner {
 }
 
 impl Evented for SockInner {
-    fn register(&self,
-                poll: &Poll,
-                token: Token,
-                interest: Ready,
-                opts: PollOpt)
-                -> io::Result<()> {
+    fn register(
+        &self,
+        poll: &Poll,
+        token: Token,
+        interest: Ready,
+        opts: PollOpt,
+    ) -> io::Result<()> {
         self.stream.register(poll, token, interest, opts)
     }
 
-    fn reregister(&self,
-                  poll: &Poll,
-                  token: Token,
-                  interest: Ready,
-                  opts: PollOpt)
-                  -> io::Result<()> {
+    fn reregister(
+        &self,
+        poll: &Poll,
+        token: Token,
+        interest: Ready,
+        opts: PollOpt,
+    ) -> io::Result<()> {
         self.stream.reregister(poll, token, interest, opts)
     }
 
