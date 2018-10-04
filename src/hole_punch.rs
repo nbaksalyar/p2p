@@ -63,7 +63,7 @@ pub struct HolePunchInfo {
     /// TCP socket that successfully managed to hole punch
     pub tcp: Option<(TcpStream, Token)>,
     /// UDP socket that successfully managed to hole punch
-    pub udp: Option<(UdpSocket, SocketAddr, Token)>,
+    pub udp: Option<(UdpSocket, SocketAddr, SocketAddr, Token)>,
     /// Encrypting Asymmetric PublicKey. Peer will use our public key to encrypt and their secret
     /// key to authenticate the message. We will use our secret key to decrypt and peer public key
     /// to validate authenticity of the message.
@@ -352,6 +352,7 @@ impl HolePunchMediator {
                     ifc,
                     poll,
                     tcp_peer,
+                    our_ext_addr,
                     &peer_enc_pk,
                     Box::new(handler),
                 ) {
@@ -381,7 +382,7 @@ impl HolePunchMediator {
         &mut self,
         ifc: &mut Interface,
         poll: &Poll,
-        res: ::Res<(UdpSocket, SocketAddr, Token)>,
+        res: ::Res<(UdpSocket, SocketAddr, SocketAddr, Token)>,
     ) {
         if let State::HolePunching { ref mut info, .. } = self.state {
             self.udp_child = None;

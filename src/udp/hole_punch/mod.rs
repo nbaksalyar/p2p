@@ -1,9 +1,8 @@
 use self::puncher::Puncher;
 use self::rendezvous_client::UdpRendezvousClient;
-use {Interface, NatError, NatState};
+use mio::net::UdpSocket;
 use mio::Poll;
 use mio::Token;
-use mio::net::UdpSocket;
 use sodium::crypto::box_;
 use std::any::Any;
 use std::cell::RefCell;
@@ -12,21 +11,23 @@ use std::fmt::{self, Debug, Formatter};
 use std::mem;
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 use std::rc::{Rc, Weak};
+use {Interface, NatError, NatState};
 
 mod puncher;
 mod rendezvous_client;
 
 pub type RendezvousFinsih = Box<FnMut(&mut Interface, &Poll, ::Res<Vec<SocketAddr>>)>;
-pub type HolePunchFinsih = Box<FnMut(&mut Interface, &Poll, ::Res<(UdpSocket, SocketAddr, Token)>)>;
+pub type HolePunchFinsih =
+    Box<FnMut(&mut Interface, &Poll, ::Res<(UdpSocket, SocketAddr, SocketAddr, Token)>)>;
 
 enum State {
     None,
     Rendezvous {
         children: HashSet<Token>,
-        info: (Vec<(UdpSocket, Token)>, Vec<SocketAddr>),
+        info: (Vec<(UdpSocket, Token, SocketAddr)>, Vec<SocketAddr>),
         f: RendezvousFinsih,
     },
-    ReadyToHolePunch(Vec<(UdpSocket, Token)>),
+    ReadyToHolePunch(Vec<(UdpSocket, Token, SocketAddr)>),
     HolePunching {
         children: HashSet<Token>,
         f: HolePunchFinsih,
@@ -49,10 +50,11 @@ pub struct UdpHolePunchMediator {
 }
 
 impl UdpHolePunchMediator {
-    pub fn start(ifc: &mut Interface,
-                 poll: &Poll,
-                 f: RendezvousFinsih)
-                 -> ::Res<Rc<RefCell<Self>>> {
+    pub fn start(
+        ifc: &mut Interface,
+        poll: &Poll,
+        f: RendezvousFinsih,
+    ) -> ::Res<Rc<RefCell<Self>>> {
         let mut socks = Vec::with_capacity(ifc.config().udp_hole_punchers.len());
         let addr_any = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::new(0, 0, 0, 0), 0));
         for _ in 0..ifc.config().udp_hole_punchers.len() {
@@ -60,9 +62,9 @@ impl UdpHolePunchMediator {
         }
 
         let mediator = Rc::new(RefCell::new(UdpHolePunchMediator {
-                                                state: State::None,
-                                                self_weak: Weak::new(),
-                                            }));
+            state: State::None,
+            self_weak: Weak::new(),
+        }));
         mediator.borrow_mut().self_weak = Rc::downgrade(&mediator);
         let weak = mediator.borrow().self_weak.clone();
 
@@ -97,11 +99,13 @@ impl UdpHolePunchMediator {
         }
     }
 
-    fn handle_rendezvous(&mut self,
-                         ifc: &mut Interface,
-                         poll: &Poll,
-                         child: Token,
-                         res: ::Res<(UdpSocket, SocketAddr)>) {
+    fn handle_rendezvous(
+        &mut self,
+        ifc: &mut Interface,
+        poll: &Poll,
+        child: Token,
+        res: ::Res<(UdpSocket, SocketAddr)>,
+    ) {
         let r = match self.state {
             State::Rendezvous {
                 ref mut children,
@@ -109,9 +113,9 @@ impl UdpHolePunchMediator {
                 ref mut f,
             } => {
                 let _ = children.remove(&child);
-                if let Ok((sock, ext_addr)) = res {
-                    info.0.push((sock, child));
-                    info.1.push(ext_addr);
+                if let Ok((sock, our_ext_addr)) = res {
+                    info.0.push((sock, child, our_ext_addr));
+                    info.1.push(our_ext_addr);
                 }
                 if children.is_empty() {
                     let mut socks = mem::replace(&mut info.0, vec![]);
@@ -129,9 +133,11 @@ impl UdpHolePunchMediator {
                 }
             }
             ref x => {
-                warn!("Logic Error in state book-keeping - Pls report this as a bug. Expected \
-                       state: State::Rendezvous ;; Found: {:?}",
-                      x);
+                warn!(
+                    "Logic Error in state book-keeping - Pls report this as a bug. Expected \
+                     state: State::Rendezvous ;; Found: {:?}",
+                    x
+                );
                 Err(NatError::InvalidState)
             }
         };
@@ -152,10 +158,11 @@ impl UdpHolePunchMediator {
 
     // Do not use callback to return success/errors in these functions. They are directly called so
     // give the result back asap, else there will be multiple borrows of the caller
-    pub fn rendezvous_timeout(&mut self,
-                              ifc: &mut Interface,
-                              poll: &Poll)
-                              -> ::Res<Vec<SocketAddr>> {
+    pub fn rendezvous_timeout(
+        &mut self,
+        ifc: &mut Interface,
+        poll: &Poll,
+    ) -> ::Res<Vec<SocketAddr>> {
         let r = match self.state {
             State::Rendezvous {
                 ref mut children,
@@ -173,21 +180,22 @@ impl UdpHolePunchMediator {
                 }
             }
             ref x => {
-                trace!("Already proceeded to the next state. Invalid state for executing a \
-                        rendezvous timeout: {:?}",
-                       x);
+                trace!(
+                    "Already proceeded to the next state. Invalid state for executing a \
+                     rendezvous timeout: {:?}",
+                    x
+                );
                 Err(NatError::InvalidState)
             }
         };
 
         let r = r.map(|(socks, ext_addrs)| {
-                          self.state = State::ReadyToHolePunch(socks);
-                          ext_addrs
-                      });
+            self.state = State::ReadyToHolePunch(socks);
+            ext_addrs
+        });
 
         match r {
-            Ok(_) |
-            Err(NatError::InvalidState) => (),
+            Ok(_) | Err(NatError::InvalidState) => (),
             Err(ref e) => {
                 debug!("Terminating due to: {:?}", e);
                 self.terminate(ifc, poll);
@@ -197,13 +205,14 @@ impl UdpHolePunchMediator {
         r
     }
 
-    pub fn punch_hole(&mut self,
-                      ifc: &mut Interface,
-                      poll: &Poll,
-                      peers: Vec<SocketAddr>,
-                      peer_enc_pk: &box_::PublicKey,
-                      f: HolePunchFinsih)
-                      -> ::Res<()> {
+    pub fn punch_hole(
+        &mut self,
+        ifc: &mut Interface,
+        poll: &Poll,
+        peers: Vec<SocketAddr>,
+        peer_enc_pk: &box_::PublicKey,
+        f: HolePunchFinsih,
+    ) -> ::Res<()> {
         let info = match self.state {
             State::ReadyToHolePunch(ref mut info) => mem::replace(info, vec![]),
             ref x => {
@@ -216,10 +225,11 @@ impl UdpHolePunchMediator {
         let hole_punchers_cfg = ifc.config().udp_hole_punchers.clone();
 
         let mut children = HashSet::with_capacity(cap);
-        for (((sock, token), peer), puncher_config) in
-            info.into_iter()
-                .zip(peers.into_iter())
-                .zip(hole_punchers_cfg.into_iter()) {
+        for (((sock, token, our_ext_addr), peer), puncher_config) in info
+            .into_iter()
+            .zip(peers.into_iter())
+            .zip(hole_punchers_cfg.into_iter())
+        {
             let weak = self.self_weak.clone();
             let handler = move |ifc: &mut Interface, poll: &Poll, token, res| {
                 if let Some(mediator) = weak.upgrade() {
@@ -228,16 +238,19 @@ impl UdpHolePunchMediator {
                         .handle_hole_punch(ifc, poll, token, res);
                 }
             };
-            if Puncher::start(ifc,
-                              poll,
-                              token,
-                              sock,
-                              puncher_config.starting_ttl,
-                              puncher_config.ttl_increment_delay_ms,
-                              peer,
-                              peer_enc_pk,
-                              Box::new(handler))
-                       .is_ok() {
+            if Puncher::start(
+                ifc,
+                poll,
+                token,
+                sock,
+                our_ext_addr,
+                puncher_config.starting_ttl,
+                puncher_config.ttl_increment_delay_ms,
+                peer,
+                peer_enc_pk,
+                Box::new(handler),
+            ).is_ok()
+            {
                 let _ = children.insert(token);
             }
         }
@@ -256,19 +269,21 @@ impl UdpHolePunchMediator {
         Ok(())
     }
 
-    fn handle_hole_punch(&mut self,
-                         ifc: &mut Interface,
-                         poll: &Poll,
-                         child: Token,
-                         res: ::Res<(UdpSocket, SocketAddr)>) {
+    fn handle_hole_punch(
+        &mut self,
+        ifc: &mut Interface,
+        poll: &Poll,
+        child: Token,
+        res: ::Res<(UdpSocket, SocketAddr, SocketAddr)>,
+    ) {
         let r = match self.state {
             State::HolePunching {
                 ref mut children,
                 ref mut f,
             } => {
                 let _ = children.remove(&child);
-                if let Ok((sock, addr)) = res {
-                    f(ifc, poll, Ok((sock, addr, child)));
+                if let Ok((sock, addr, our_ext_addr)) = res {
+                    f(ifc, poll, Ok((sock, addr, our_ext_addr, child)));
                     Ok(true)
                 } else if children.is_empty() {
                     f(ifc, poll, Err(NatError::UdpHolePunchFailed));
@@ -278,9 +293,11 @@ impl UdpHolePunchMediator {
                 }
             }
             ref x => {
-                warn!("Logic Error in state book-keeping - Pls report this as a bug. Expected \
-                       state: State::HolePunching ;; Found: {:?}",
-                      x);
+                warn!(
+                    "Logic Error in state book-keeping - Pls report this as a bug. Expected \
+                     state: State::HolePunching ;; Found: {:?}",
+                    x
+                );
                 Err(NatError::InvalidState)
             }
         };
@@ -310,8 +327,8 @@ impl UdpHolePunchMediator {
         }
     }
 
-    fn dereg_socks(poll: &Poll, socks: &mut Vec<(UdpSocket, Token)>) {
-        for (sock, _) in socks.drain(..) {
+    fn dereg_socks(poll: &Poll, socks: &mut Vec<(UdpSocket, Token, SocketAddr)>) {
+        for (sock, _, _) in socks.drain(..) {
             let _ = poll.deregister(&sock);
         }
     }
@@ -331,7 +348,9 @@ impl NatState for UdpHolePunchMediator {
             State::ReadyToHolePunch(ref mut socks) => {
                 UdpHolePunchMediator::dereg_socks(poll, socks)
             }
-            State::HolePunching { ref mut children, .. } => {
+            State::HolePunching {
+                ref mut children, ..
+            } => {
                 UdpHolePunchMediator::terminate_children(ifc, poll, children);
             }
             State::None => (),
