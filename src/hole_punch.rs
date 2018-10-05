@@ -388,6 +388,8 @@ impl HolePunchMediator {
             if let Ok(sock) = res {
                 trace!("UDP has successfully hole punched");
                 info.udp = Some(sock);
+            } else {
+                error!("UDP failed to hole punch");
             }
         }
 
@@ -405,6 +407,8 @@ impl HolePunchMediator {
             if let Ok(sock) = res {
                 trace!("TCP has successfully hole punched");
                 info.tcp = Some(sock);
+            } else {
+                error!("TCP failed to hole punch");
             }
         }
 
