@@ -1,7 +1,7 @@
 #![allow(deprecated)]
 
 extern crate mio;
-extern crate p2p;
+extern crate p2p_old;
 extern crate rust_sodium as sodium;
 extern crate serde_json;
 #[macro_use]
@@ -11,8 +11,8 @@ extern crate env_logger;
 use self::event_loop::{spawn_event_loop, Core, CoreMsg, CoreState, El};
 use mio::net::UdpSocket;
 use mio::{Poll, PollOpt, Ready, Token};
-use p2p::HolePunchInfo;
-use p2p::{Handle, HolePunchMediator, Interface, NatMsg, RendezvousInfo, Res};
+use p2p_old::HolePunchInfo;
+use p2p_old::{Handle, HolePunchMediator, Interface, NatMsg, RendezvousInfo, Res};
 use sodium::crypto::box_;
 use std::cell::RefCell;
 use std::collections::VecDeque;
@@ -85,7 +85,7 @@ impl ChatEngine {
             Err(e) => panic!("Error in chat engine read: {:?}", e),
         };
 
-        let msg = unwrap!(String::from_utf8(unwrap!(p2p::msg_to_read(
+        let msg = unwrap!(String::from_utf8(unwrap!(p2p_old::msg_to_read(
             &self.read_buf[..bytes_rxd],
             &self.key
         ))));
@@ -98,7 +98,7 @@ impl ChatEngine {
     fn write(&mut self, _core: &mut Core, poll: &Poll, m: Option<String>) {
         let m = match m {
             Some(m) => {
-                let cipher_text = unwrap!(p2p::msg_to_send(m.as_bytes(), &self.key));
+                let cipher_text = unwrap!(p2p_old::msg_to_send(m.as_bytes(), &self.key));
                 if self.write_queue.is_empty() {
                     cipher_text
                 } else {
@@ -225,7 +225,7 @@ fn main() {
         }
     };
 
-    let (sock, peer, token) = match (udp, tcp) {
+    let (sock, peer, _ext_peer_addr, token) = match (udp, tcp) {
         (Some(info), Some(_)) => {
             println!("Connected via both, TCP and UDP. Choosing UDP...\n");
             info

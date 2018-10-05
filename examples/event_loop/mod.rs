@@ -1,12 +1,12 @@
-use mio::{Events, Poll, PollOpt, Ready, Token};
 use mio::channel::{self, Sender};
 use mio::timer::{Timeout, Timer, TimerError};
-use p2p::{Config, Interface, NatMsg, NatState, NatTimer};
+use mio::{Events, Poll, PollOpt, Ready, Token};
+use p2p_old::{Config, Interface, NatMsg, NatState, NatTimer};
 use serde_json;
 use sodium::crypto::box_;
 use std::cell::RefCell;
-use std::collections::HashMap;
 use std::collections::hash_map::Entry;
+use std::collections::HashMap;
 use std::fs::File;
 use std::io::Read;
 use std::rc::Rc;
@@ -26,10 +26,11 @@ pub struct Core {
 
 impl Core {
     #[allow(unused)]
-    pub fn insert_peer_state(&mut self,
-                             token: Token,
-                             state: Rc<RefCell<CoreState>>)
-                             -> Result<(), (Rc<RefCell<CoreState>>, String)> {
+    pub fn insert_peer_state(
+        &mut self,
+        token: Token,
+        state: Rc<RefCell<CoreState>>,
+    ) -> Result<(), (Rc<RefCell<CoreState>>, String)> {
         if let Entry::Vacant(ve) = self.peer_states.entry(token) {
             ve.insert(state);
             Ok(())
@@ -64,10 +65,11 @@ impl Core {
 }
 
 impl Interface for Core {
-    fn insert_state(&mut self,
-                    token: Token,
-                    state: Rc<RefCell<NatState>>)
-                    -> Result<(), (Rc<RefCell<NatState>>, String)> {
+    fn insert_state(
+        &mut self,
+        token: Token,
+        state: Rc<RefCell<NatState>>,
+    ) -> Result<(), (Rc<RefCell<NatState>>, String)> {
         if let Entry::Vacant(ve) = self.nat_states.entry(token) {
             ve.insert(state);
             Ok(())
@@ -84,10 +86,11 @@ impl Interface for Core {
         self.nat_states.get(&token).cloned()
     }
 
-    fn set_timeout(&mut self,
-                   duration: Duration,
-                   timer_detail: NatTimer)
-                   -> Result<Timeout, TimerError> {
+    fn set_timeout(
+        &mut self,
+        duration: Duration,
+        timer_detail: NatTimer,
+    ) -> Result<Timeout, TimerError> {
         self.timer.set_timeout(duration, timer_detail)
     }
 
@@ -128,9 +131,11 @@ impl CoreMsg {
     #[allow(unused)]
     pub fn new<F: FnOnce(&mut Core, &Poll) + Send + 'static>(f: F) -> Self {
         let mut f = Some(f);
-        CoreMsg(Some(Box::new(move |core: &mut Core, poll: &Poll| if let Some(f) = f.take() {
-                                  f(core, poll);
-                              })))
+        CoreMsg(Some(Box::new(move |core: &mut Core, poll: &Poll| {
+            if let Some(f) = f.take() {
+                f(core, poll);
+            }
+        })))
     }
 }
 
@@ -168,18 +173,24 @@ pub fn spawn_event_loop() -> El {
         let (enc_pk, enc_sk) = box_::gen_keypair();
         let timer = Timer::default();
 
-        unwrap!(poll.register(&timer,
-                              Token(TIMER_TOKEN),
-                              Ready::readable() | Ready::error() | Ready::hup(),
-                              PollOpt::edge()));
-        unwrap!(poll.register(&core_rx,
-                              Token(CORE_RX_TOKEN),
-                              Ready::readable() | Ready::error() | Ready::hup(),
-                              PollOpt::edge()));
-        unwrap!(poll.register(&nat_rx,
-                              Token(NAT_RX_TOKEN),
-                              Ready::readable() | Ready::error() | Ready::hup(),
-                              PollOpt::edge()));
+        unwrap!(poll.register(
+            &timer,
+            Token(TIMER_TOKEN),
+            Ready::readable() | Ready::error() | Ready::hup(),
+            PollOpt::edge()
+        ));
+        unwrap!(poll.register(
+            &core_rx,
+            Token(CORE_RX_TOKEN),
+            Ready::readable() | Ready::error() | Ready::hup(),
+            PollOpt::edge()
+        ));
+        unwrap!(poll.register(
+            &nat_rx,
+            Token(NAT_RX_TOKEN),
+            Ready::readable() | Ready::error() | Ready::hup(),
+            PollOpt::edge()
+        ));
 
         let mut core = Core {
             nat_states: HashMap::with_capacity(10),
@@ -223,7 +234,6 @@ pub fn spawn_event_loop() -> El {
                 }
             }
         }
-
     });
 
     El {
