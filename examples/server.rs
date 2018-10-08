@@ -1,14 +1,14 @@
 #![allow(deprecated)]
 
 extern crate mio;
-extern crate p2p;
+extern crate p2p_old;
 extern crate serde_json;
 extern crate rust_sodium as sodium;
 #[macro_use]
 extern crate unwrap;
 
 use self::event_loop::spawn_event_loop;
-use p2p::{NatMsg, TcpRendezvousServer, UdpRendezvousServer};
+use p2p_old::{NatMsg, TcpRendezvousServer, UdpRendezvousServer};
 use std::sync::mpsc;
 
 mod event_loop;
