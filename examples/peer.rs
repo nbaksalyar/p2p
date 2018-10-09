@@ -7,8 +7,10 @@ extern crate serde_json;
 #[macro_use]
 extern crate unwrap;
 extern crate env_logger;
+extern crate maidsafe_utilities;
 
 use self::event_loop::{spawn_event_loop, Core, CoreMsg, CoreState, El};
+use maidsafe_utilities::log;
 use mio::net::UdpSocket;
 use mio::{Poll, PollOpt, Ready, Token};
 use p2p_old::HolePunchInfo;
@@ -174,7 +176,8 @@ fn start_chatting(el: &El, token: Token) {
 }
 
 fn main() {
-    env_logger::init();
+    unwrap!(log::init(false));
+
     let el = spawn_event_loop();
     let (handle, rendezvous_info) = match get_rendezvous_info(&el) {
         Ok((h, r)) => (h, r),
