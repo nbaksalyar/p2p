@@ -110,21 +110,23 @@ impl Puncher {
     }
 
     fn read(&mut self, ifc: &mut Interface, poll: &Poll) {
-        let mut super_buf: Vec<u8> = Vec::new();
+        let mut buf = [0; 512];
+        let mut len = 0;
         loop {
-            let mut buf = [0; 512];
             // FIXME will need to be done in a loop until wouldblock or Ok(None) - Same for rendezvous
             // server
             let r = match self.sock.as_ref() {
                 Some(s) => s.recv_from(&mut buf),
                 None => return,
             };
-            let bytes_rxd = match r {
-                Ok((bytes, _)) => bytes,
+            match r {
+                Ok((bytes, _)) => {
+                    len = bytes;
+                }
                 Err(ref e)
                     if e.kind() == ErrorKind::WouldBlock || e.kind() == ErrorKind::Interrupted =>
                 {
-                    if super_buf.is_empty() {
+                    if len == 0 {
                         return;
                     } else {
                         break;
@@ -135,14 +137,9 @@ impl Puncher {
                     return self.handle_err(ifc, poll);
                 }
             };
-            super_buf.extend_from_slice(&buf[..bytes_rxd]);
         }
 
-        trace!("read sock addr {}", self.peer);
-        trace!("read msg size = {}", super_buf.len());
-        trace!("read msg contents = {:?}", super_buf);
-
-        let msg = match ::msg_to_read(&super_buf, &self.key) {
+        let msg = match ::msg_to_read(&buf, &self.key) {
             Ok(m) => m,
             Err(e) => {
                 debug!("Udp Hole Puncher has errored out in read: {:?}", e);
@@ -195,10 +192,6 @@ impl Puncher {
 
             ::msg_to_send(m, &self.key)?
         };
-
-        trace!("sent sock addr {}", self.peer);
-        trace!("sent msg size = {}", msg.len());
-        trace!("sent msg contents = {:?}", msg);
 
         let r = match self.sock.as_ref() {
             Some(s) => s.send_to(&msg, &self.peer),
