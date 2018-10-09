@@ -75,24 +75,35 @@ impl UdpRendezvousClient {
 
     fn read(&mut self, ifc: &mut Interface, poll: &Poll) {
         let mut buf = [0; 512];
-        // FIXME will need to be done in a loop until wouldblock or Ok(None) - Same for rendezvous
-        // server
-        let r = match self.sock.as_ref() {
-            Some(s) => s.recv_from(&mut buf),
-            None => return,
-        };
-        let bytes_rxd = match r {
-            Ok((bytes, _)) => bytes,
-            Err(ref e)
-                if e.kind() == ErrorKind::WouldBlock || e.kind() == ErrorKind::Interrupted =>
-            {
-                return
-            }
-            Err(e) => {
-                debug!("Udp Rendezvous Client has errored out in read: {:?}", e);
-                return self.handle_err(ifc, poll);
-            }
-        };
+        let mut bytes_rxd = 0;
+        loop {
+            let r = match self.sock.as_ref() {
+                Some(s) => s.recv_from(&mut buf),
+                None => return,
+            };
+            match r {
+                Ok((bytes, _)) => {
+                    bytes_rxd = bytes;
+                }
+                Err(ref e)
+                    if e.kind() == ErrorKind::WouldBlock || e.kind() == ErrorKind::Interrupted =>
+                {
+                    if bytes_rxd == 0 {
+                        return;
+                    } else {
+                        break;
+                    }
+                }
+                Err(e) => {
+                    debug!("Udp Rendezvous Client has errored out in read: {:?}", e);
+                    return self.handle_err(ifc, poll);
+                }
+            };
+        }
+
+        if bytes_rxd == 0 {
+            return;
+        }
 
         let UdpEchoResp(cipher_text) = match deserialize(&buf[..bytes_rxd]) {
             Ok(req) => req,

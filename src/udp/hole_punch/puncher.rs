@@ -111,22 +111,20 @@ impl Puncher {
 
     fn read(&mut self, ifc: &mut Interface, poll: &Poll) {
         let mut buf = [0; 512];
-        let mut len = 0;
+        let mut bytes_rxd = 0;
         loop {
-            // FIXME will need to be done in a loop until wouldblock or Ok(None) - Same for rendezvous
-            // server
             let r = match self.sock.as_ref() {
                 Some(s) => s.recv_from(&mut buf),
                 None => return,
             };
             match r {
                 Ok((bytes, _)) => {
-                    len = bytes;
+                    bytes_rxd = bytes;
                 }
                 Err(ref e)
                     if e.kind() == ErrorKind::WouldBlock || e.kind() == ErrorKind::Interrupted =>
                 {
-                    if len == 0 {
+                    if bytes_rxd == 0 {
                         return;
                     } else {
                         break;
@@ -139,7 +137,11 @@ impl Puncher {
             };
         }
 
-        let msg = match ::msg_to_read(&buf, &self.key) {
+        if bytes_rxd == 0 {
+            return;
+        }
+
+        let msg = match ::msg_to_read(&buf[..bytes_rxd], &self.key) {
             Ok(m) => m,
             Err(e) => {
                 debug!("Udp Hole Puncher has errored out in read: {:?}", e);
