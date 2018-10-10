@@ -1,9 +1,8 @@
 use super::{UdpEchoReq, UdpEchoResp};
-use {Interface, NatError, NatState};
-use bincode::{Infinite, deserialize, serialize};
+use bincode::{deserialize, serialize, Infinite};
 use config::UDP_RENDEZVOUS_PORT;
-use mio::{Poll, PollOpt, Ready, Token};
 use mio::net::UdpSocket;
+use mio::{Poll, PollOpt, Ready, Token};
 use sodium::crypto::box_::PublicKey;
 use sodium::crypto::sealedbox;
 use std::any::Any;
@@ -12,6 +11,7 @@ use std::collections::VecDeque;
 use std::io::ErrorKind;
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 use std::rc::Rc;
+use {Interface, NatError, NatState};
 
 /// UDP Rendezvous server.
 ///
@@ -30,7 +30,8 @@ pub struct UdpRendezvousServer {
 impl UdpRendezvousServer {
     /// Boot the UDP Rendezvous server. This should normally be called only once.
     pub fn start(ifc: &mut Interface, poll: &Poll) -> ::Res<Token> {
-        let port = ifc.config()
+        let port = ifc
+            .config()
             .udp_rendezvous_port
             .unwrap_or(UDP_RENDEZVOUS_PORT);
         let addr = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::new(0, 0, 0, 0), port));
@@ -38,16 +39,18 @@ impl UdpRendezvousServer {
 
         let token = ifc.new_token();
 
-        poll.register(&sock,
-                      token,
-                      Ready::readable() | Ready::error() | Ready::hup(),
-                      PollOpt::edge())?;
+        poll.register(
+            &sock,
+            token,
+            Ready::readable() | Ready::error() | Ready::hup(),
+            PollOpt::edge(),
+        )?;
 
         let server = Rc::new(RefCell::new(UdpRendezvousServer {
-                                              sock: sock,
-                                              token: token,
-                                              write_queue: VecDeque::with_capacity(3),
-                                          }));
+            sock: sock,
+            token: token,
+            write_queue: VecDeque::with_capacity(3),
+        }));
 
         if ifc.insert_state(token, server.clone()).is_err() {
             warn!("Unable to start UdpRendezvousServer!");
@@ -60,15 +63,34 @@ impl UdpRendezvousServer {
 
     fn read(&mut self, ifc: &mut Interface, poll: &Poll) {
         let mut buf = [0; 512];
-        let (bytes_rxd, peer) = match self.sock.recv_from(&mut buf) {
-            Ok((bytes, peer)) => (bytes, peer),
-            Err(ref e) if e.kind() == ErrorKind::WouldBlock ||
-                          e.kind() == ErrorKind::Interrupted => return,
-            Err(e) => {
-                warn!("Udp Rendezvous Server has errored out in read: {:?}", e);
-                return self.terminate(ifc, poll);
+        let mut bytes_rxd = 0;
+        let mut peer = None;
+        loop {
+            match self.sock.recv_from(&mut buf) {
+                Ok((bytes, rcvd_peer)) => {
+                    bytes_rxd = bytes;
+                    peer = Some(rcvd_peer);
+                }
+                Err(ref e)
+                    if e.kind() == ErrorKind::WouldBlock || e.kind() == ErrorKind::Interrupted =>
+                {
+                    if bytes_rxd == 0 {
+                        return;
+                    } else {
+                        break;
+                    }
+                }
+                Err(e) => {
+                    warn!("Udp Rendezvous Server has errored out in read: {:?}", e);
+                    return self.terminate(ifc, poll);
+                }
             }
-        };
+        }
+
+        if bytes_rxd == 0 || peer.is_none() {
+            return;
+        }
+        let peer = peer.unwrap();
 
         let UdpEchoReq(peer_pk) = match deserialize(&buf[..bytes_rxd]) {
             Ok(req) => req,
@@ -78,8 +100,10 @@ impl UdpRendezvousServer {
             }
         };
 
-        let resp = UdpEchoResp(sealedbox::seal(format!("{}", peer).as_bytes(),
-                                               &PublicKey(peer_pk)));
+        let resp = UdpEchoResp(sealedbox::seal(
+            format!("{}", peer).as_bytes(),
+            &PublicKey(peer_pk),
+        ));
         let ser_resp = match serialize(&resp, Infinite) {
             Ok(s) => s,
             Err(e) => {
@@ -108,30 +132,36 @@ impl UdpRendezvousServer {
         match self.sock.send_to(&resp, &peer) {
             Ok(bytes_txd) => {
                 if bytes_txd != resp.len() {
-                    debug!("Partial datagram sent - datagram will be treated as corrupted. \
-                            Actual size: {} B, sent size: {} B.",
-                           resp.len(),
-                           bytes_txd);
+                    debug!(
+                        "Partial datagram sent - datagram will be treated as corrupted. \
+                         Actual size: {} B, sent size: {} B.",
+                        resp.len(),
+                        bytes_txd
+                    );
                 }
             }
-            Err(ref e) if e.kind() == ErrorKind::WouldBlock ||
-                          e.kind() == ErrorKind::Interrupted => {
+            Err(ref e)
+                if e.kind() == ErrorKind::WouldBlock || e.kind() == ErrorKind::Interrupted =>
+            {
                 self.write_queue.push_front((peer, resp))
             }
             Err(e) => return Err(From::from(e)),
         }
 
         if self.write_queue.is_empty() {
-            Ok(poll.reregister(&self.sock,
-                               self.token,
-                               Ready::readable() | Ready::error() | Ready::hup(),
-                               PollOpt::edge())?)
+            Ok(poll.reregister(
+                &self.sock,
+                self.token,
+                Ready::readable() | Ready::error() | Ready::hup(),
+                PollOpt::edge(),
+            )?)
         } else {
-            Ok(poll.reregister(&self.sock,
-                               self.token,
-                               Ready::readable() | Ready::writable() | Ready::error() |
-                               Ready::hup(),
-                               PollOpt::edge())?)
+            Ok(poll.reregister(
+                &self.sock,
+                self.token,
+                Ready::readable() | Ready::writable() | Ready::error() | Ready::hup(),
+                PollOpt::edge(),
+            )?)
         }
     }
 }
