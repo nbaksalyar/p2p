@@ -62,23 +62,42 @@ impl UdpRendezvousServer {
     }
 
     fn read(&mut self, ifc: &mut Interface, poll: &Poll) {
-        let mut buf = [0; 512];
-        let mut bytes_rxd = 0;
-        let mut peer = None;
+        let mut write = false;
         loop {
+            let mut buf = [0; 512];
             match self.sock.recv_from(&mut buf) {
-                Ok((bytes, rcvd_peer)) => {
-                    bytes_rxd = bytes;
-                    peer = Some(rcvd_peer);
+                Ok((bytes_rxd, peer)) => {
+                    if bytes_rxd == 0 {
+                        continue;
+                    }
+                    let UdpEchoReq(peer_pk) = match deserialize(&buf[..bytes_rxd]) {
+                        Ok(req) => req,
+                        Err(e) => {
+                            trace!("Unknown msg rxd by Udp Rendezvous Server: {:?}", e);
+                            continue;
+                        }
+                    };
+
+                    let resp = UdpEchoResp(sealedbox::seal(
+                        format!("{}", peer).as_bytes(),
+                        &PublicKey(peer_pk),
+                    ));
+                    let ser_resp = match serialize(&resp, Infinite) {
+                        Ok(s) => s,
+                        Err(e) => {
+                            warn!("Error in serialization: {:?}", e);
+                            continue;
+                        }
+                    };
+
+                    self.write_queue.push_back((peer, ser_resp));
+
+                    write = true;
                 }
                 Err(ref e)
                     if e.kind() == ErrorKind::WouldBlock || e.kind() == ErrorKind::Interrupted =>
                 {
-                    if bytes_rxd == 0 {
-                        return;
-                    } else {
-                        break;
-                    }
+                    break;
                 }
                 Err(e) => {
                     warn!("Udp Rendezvous Server has errored out in read: {:?}", e);
@@ -86,34 +105,9 @@ impl UdpRendezvousServer {
                 }
             }
         }
-
-        if bytes_rxd == 0 || peer.is_none() {
-            return;
+        if write {
+            self.write(ifc, poll)
         }
-        let peer = peer.unwrap();
-
-        let UdpEchoReq(peer_pk) = match deserialize(&buf[..bytes_rxd]) {
-            Ok(req) => req,
-            Err(e) => {
-                trace!("Unknown msg rxd by Udp Rendezvous Server: {:?}", e);
-                return;
-            }
-        };
-
-        let resp = UdpEchoResp(sealedbox::seal(
-            format!("{}", peer).as_bytes(),
-            &PublicKey(peer_pk),
-        ));
-        let ser_resp = match serialize(&resp, Infinite) {
-            Ok(s) => s,
-            Err(e) => {
-                warn!("Error in serialization: {:?}", e);
-                return;
-            }
-        };
-
-        self.write_queue.push_back((peer, ser_resp));
-        self.write(ifc, poll)
     }
 
     fn write(&mut self, ifc: &mut Interface, poll: &Poll) {
