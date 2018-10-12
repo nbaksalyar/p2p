@@ -1,6 +1,6 @@
 #![allow(deprecated)]
 
-extern crate env_logger;
+extern crate maidsafe_utilities;
 #[macro_use]
 extern crate log;
 extern crate mio;
@@ -12,6 +12,7 @@ extern crate unwrap;
 extern crate socket_collection;
 
 use self::event_loop::{spawn_event_loop, Core, CoreMsg, CoreState, El};
+use maidsafe_utilities::log as logger;
 use mio::{Poll, PollOpt, Ready, Token};
 use p2p::{Handle, HolePunchInfo, HolePunchMediator, Interface, NatMsg, RendezvousInfo, Res};
 use socket_collection::{UdpSock, UdtSock};
@@ -177,7 +178,7 @@ fn start_chatting(el: &El, token: Token, rx: mpsc::Receiver<()>) {
 }
 
 fn main() {
-    env_logger::init();
+    unwrap!(logger::init(false));
 
     let el = spawn_event_loop();
     let (handle, rendezvous_info) = match get_rendezvous_info(&el) {
