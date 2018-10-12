@@ -40,7 +40,6 @@ pub struct Puncher {
     sending: Sending,
     syn_ack_rxd: bool,
     syn_ack_txd: bool,
-    print_stat: bool,
     f: Finish,
 }
 
@@ -59,7 +58,6 @@ impl Puncher {
     ) -> ::Res<()> {
         let os_ttl = sock.ttl()?;
         sock.set_ttl(ttl as u32)?;
-        let print_stat = ttl == 2;
 
         let timeout = match ifc.set_timeout(
             Duration::from_millis(ttl_inc_interval_ms),
@@ -96,7 +94,6 @@ impl Puncher {
             sending: Sending::Syn,
             syn_ack_rxd: false,
             syn_ack_txd: false,
-            print_stat,
             f: f,
         }));
 
@@ -304,9 +301,6 @@ impl NatState for Puncher {
             }
         };
         self.current_ttl += 1;
-        if self.print_stat {
-            info!("new ttl is equal to {}", self.current_ttl);
-        }
         if self.current_ttl >= self.os_ttl {
             debug!("OS TTL reached and still could not hole punch - giving up");
             return self.handle_err(ifc, poll);
